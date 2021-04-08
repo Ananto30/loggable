@@ -26,94 +26,92 @@ public class LoggerAspect {
         long start = System.currentTimeMillis();
         var result = joinPoint.proceed();
         if (result instanceof Mono) {
-            var monoResult = (Mono) result;
-            AtomicReference<String> traceId = new AtomicReference<>("");
-
-            return monoResult
-                    .doOnSuccess(o -> {
-                        if (!traceId.get().isEmpty()) {
-                            MDC.put("X-B3-TraceId", traceId.get());
-                        }
-                        var response = "";
-                        if (Objects.nonNull(o)) {
-                            response = o.toString();
-                        }
-                        log.info("Enter: {}.{}() with argument[s] = {}",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs());
-                        log.info("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs()[0],
-                                response, (System.currentTimeMillis() - start));
-                    })
-                    .subscriberContext(context -> {
-                        Context contextTmp = (Context) context;
-                        if (contextTmp.hasKey("X-B3-TraceId")) {
-                            traceId.set(contextTmp.get("X-B3-TraceId"));
-                            MDC.put("X-B3-TraceId", contextTmp.get("X-B3-TraceId"));
-                        }
-                        return context;
-                    })
-                    .doOnError(o -> {
-                        if (!traceId.get().isEmpty()) {
-                            MDC.put("X-B3-TraceId", traceId.get());
-                        }
-                        log.info("Enter: {}.{}() with argument[s] = {}",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs());
-                        log.error("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs()[0],
-                                o.toString(), (System.currentTimeMillis() - start));
-                    });
+            return logMonoResult(joinPoint, start, (Mono) result);
         } else if (result instanceof Flux) {
-            var fluxResult = (Flux) result;
-
-            return fluxResult
-                    .doFinally(o -> {
-                        log.info("Enter: {}.{}() with argument[s] = {}",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs());
-                        log.info("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs()[0],
-                                o.toString(), (System.currentTimeMillis() - start));
-                    })
-                    .doOnError(o -> {
-                        log.info("Enter: {}.{}() with argument[s] = {}",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs());
-                        log.error("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                                joinPoint.getArgs()[0],
-                                o.toString(), (System.currentTimeMillis() - start));
-                    });
+            return logFluxResult(joinPoint, start, (Flux) result);
         } else {
-            log.warn("Body type is not Mono/Flux for {}.{}()",
-                    joinPoint.getSignature().getDeclaringTypeName(),
-                    joinPoint.getSignature().getName());
-
-            try {
-                log.info("Enter: {}.{}() with argument[s] = {}",
-                        joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                        joinPoint.getArgs());
-                log.info("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                        joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                        joinPoint.getArgs()[0],
-                        result, (System.currentTimeMillis() - start));
-            } catch (Exception e) {
-                log.info("Enter: {}.{}() with argument[s] = {}",
-                        joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                        joinPoint.getArgs());
-                log.error("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
-                        joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
-                        joinPoint.getArgs()[0],
-                        e, (System.currentTimeMillis() - start));
-            }
-
+            // body type is not Mono/Flux
+            logResult(joinPoint, start, result);
             return result;
         }
 
+    }
+
+    private Mono logMonoResult(ProceedingJoinPoint joinPoint, long start, Mono result) {
+        AtomicReference<String> traceId = new AtomicReference<>("");
+        return result
+                .doOnSuccess(o -> {
+                    setTraceIdInMDC(traceId);
+                    var response = Objects.nonNull(o) ? o.toString() : "";
+                    logEntry(joinPoint);
+                    logSuccessExit(joinPoint, start, response);
+                })
+                .subscriberContext(context -> {
+                    // the error happens in a different thread, so get the trace from context, set in MDC and downstream to doOnError
+                    setTraceIdFromContext(traceId, (Context) context);
+                    return context;
+                })
+                .doOnError(o -> {
+                    setTraceIdInMDC(traceId);
+                    logEntry(joinPoint);
+                    logErrorExit(joinPoint, start, o.toString());
+                });
+    }
+
+    private Flux logFluxResult(ProceedingJoinPoint joinPoint, long start, Flux result) {
+        return result
+                .doFinally(o -> {
+                    logEntry(joinPoint);
+                    logSuccessExit(joinPoint, start, o.toString()); // NOTE: this is costly
+                })
+                .doOnError(o -> {
+                    logEntry(joinPoint);
+                    logErrorExit(joinPoint, start, o.toString());
+                });
+    }
+
+    private void logResult(ProceedingJoinPoint joinPoint, long start, Object result) {
+        try {
+            logEntry(joinPoint);
+            logSuccessExit(joinPoint, start, result.toString());
+        } catch (Exception e) {
+            logEntry(joinPoint);
+            logErrorExit(joinPoint, start, e.getMessage());
+        }
+    }
+
+
+    private void logErrorExit(ProceedingJoinPoint joinPoint, long start, String error) {
+        log.error("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
+                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
+                joinPoint.getArgs()[0],
+                error, (System.currentTimeMillis() - start));
+    }
+
+    private void logSuccessExit(ProceedingJoinPoint joinPoint, long start, String response) {
+        log.info("Exit: {}.{}() had arguments = {}, with result = {}, Execution time = {} ms",
+                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
+                joinPoint.getArgs()[0],
+                response, (System.currentTimeMillis() - start));
+    }
+
+    private void logEntry(ProceedingJoinPoint joinPoint) {
+        log.info("Enter: {}.{}() with argument[s] = {}",
+                joinPoint.getSignature().getDeclaringTypeName(), joinPoint.getSignature().getName(),
+                joinPoint.getArgs());
+    }
+
+    private void setTraceIdFromContext(AtomicReference<String> traceId, Context context) {
+        if (context.hasKey("X-B3-TraceId")) {
+            traceId.set(context.get("X-B3-TraceId"));
+            setTraceIdInMDC(traceId);
+        }
+    }
+
+    private void setTraceIdInMDC(AtomicReference<String> traceId) {
+        if (!traceId.get().isEmpty()) {
+            MDC.put("X-B3-TraceId", traceId.get());
+        }
     }
 
 }
