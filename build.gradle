@@ -11,6 +11,8 @@ plugins {
     id 'java-library'
 }
 
+sourceCompatibility = '11'
+
 repositories {
     // Use jcenter for resolving dependencies.
     // You can declare any Maven/Ivy/file repository here.
@@ -20,18 +22,24 @@ repositories {
 
 dependencies {
 
-	implementation 'org.projectlombok:lombok'
+	implementation 'org.projectlombok:lombok:1.18.18'
 
-	annotationProcessor 'org.projectlombok:lombok'
-	testAnnotationProcessor 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok:1.18.18'
+	testAnnotationProcessor 'org.projectlombok:lombok:1.18.18'
+
+	implementation 'org.slf4j:slf4j-api:1.7.29'
 
 	implementation 'org.aspectj:aspectjweaver:1.8.8'
-	implementation 'org.springframework.boot:spring-boot-starter-webflux'
+	// https://mvnrepository.com/artifact/org.springframework/spring-webflux
+	implementation group: 'org.springframework', name: 'spring-webflux', version: '5.2.13.RELEASE'
+
 
 	testImplementation 'org.projectlombok:lombok'
-	testImplementation 'junit:junit'
-	testImplementation 'org.mockito:mockito-core'
-	testImplementation 'org.slf4j:slf4j-simple'
+	// https://mvnrepository.com/artifact/junit/junit
+	testImplementation group: 'junit', name: 'junit', version: '4.13.1'
+	// https://mvnrepository.com/artifact/org.mockito/mockito-core
+	testImplementation group: 'org.mockito', name: 'mockito-core', version: '3.8.0'
+
 
 }
 
